@@ -602,45 +602,50 @@ def scan_unicode(input_text: str, options: Optional[Union[PromptCageOptions, Map
     counts = {"tags": 0, "bidi": 0, "zero_width": 0, "variation_selectors": 0, "controls": 0, "confusables": 0}
     first_positions = {"tags": -1, "bidi": -1, "zero_width": -1, "variation_selectors": -1, "controls": -1, "confusables": -1}
     confusable_examples: List[str] = []
-    segments, tag_count, tag_first = _decode_tag_runs(input_text)
+    segments, tag_count, _tag_first = _decode_tag_runs(input_text)
     counts["tags"] = tag_count
-    first_positions["tags"] = tag_first
-
-    for index, ch in enumerate(input_text):
-        cp = ord(ch)
-        if _is_bidi_control(cp):
-            counts["bidi"] += 1
-            if first_positions["bidi"] == -1:
-                first_positions["bidi"] = index
-        if _is_zero_width(cp):
-            counts["zero_width"] += 1
-            if first_positions["zero_width"] == -1:
-                first_positions["zero_width"] = index
-        if _is_variation_selector(cp):
-            counts["variation_selectors"] += 1
-            if first_positions["variation_selectors"] == -1:
-                first_positions["variation_selectors"] = index
-        if _is_restricted_control(cp):
-            counts["controls"] += 1
-            if first_positions["controls"] == -1:
-                first_positions["controls"] = index
 
     normalized = unicodedata.normalize("NFKC", input_text) if opts.normalize_unicode else input_text
     canonical_chars: List[str] = []
-    for index, ch in enumerate(normalized):
+    canonical_index = 0
+    for ch in normalized:
         cp = ord(ch)
-        if _is_tag_char(cp) or _is_bidi_control(cp) or _is_zero_width(cp) or _is_variation_selector(cp) or _is_restricted_control(cp):
+        if _is_tag_char(cp):
+            if first_positions["tags"] == -1:
+                first_positions["tags"] = canonical_index
+            continue
+        if _is_bidi_control(cp):
+            counts["bidi"] += 1
+            if first_positions["bidi"] == -1:
+                first_positions["bidi"] = canonical_index
+            continue
+        if _is_zero_width(cp):
+            counts["zero_width"] += 1
+            if first_positions["zero_width"] == -1:
+                first_positions["zero_width"] = canonical_index
+            continue
+        if _is_variation_selector(cp):
+            counts["variation_selectors"] += 1
+            if first_positions["variation_selectors"] == -1:
+                first_positions["variation_selectors"] = canonical_index
+            continue
+        if _is_restricted_control(cp):
+            counts["controls"] += 1
+            if first_positions["controls"] == -1:
+                first_positions["controls"] = canonical_index
             continue
         replacement = _CONFUSABLE_MAP.get(ch)
         if replacement is not None:
             counts["confusables"] += 1
             if first_positions["confusables"] == -1:
-                first_positions["confusables"] = index
+                first_positions["confusables"] = canonical_index
             if len(confusable_examples) < 8:
                 confusable_examples.append(_hex_code_point(cp) + "->" + replacement)
             canonical_chars.append(replacement)
+            canonical_index += len(replacement)
         else:
             canonical_chars.append(ch)
+            canonical_index += len(ch)
     canonical = "".join(canonical_chars)
 
     findings: List[Finding] = []
@@ -679,7 +684,6 @@ def scan_unicode(input_text: str, options: Optional[Union[PromptCageOptions, Map
     stats["input_length"] = len(input_text)
     stats["canonical_length"] = len(canonical)
     return UnicodeScanResult(canonical=canonical, findings=tuple(findings), hidden_segments=tuple(segments), stats=MappingProxyType(stats))
-
 
 _EXACT_PATTERNS = (
     ("<|im_start|>", "GP-INJ-TOKEN-001", "Chat template start control token"),
@@ -1146,7 +1150,12 @@ def _collect_encoded_layer(
             decoded_length=len(decoded),
         ))
 
-        nested = scan_injection(decoded, opts)
+        unicode_options = replace(opts, max_input_length=max(opts.max_input_length, len(decoded)))
+        decoded_unicode = scan_unicode(decoded, unicode_options)
+        nested = list(decoded_unicode.findings)
+        for segment in decoded_unicode.hidden_segments:
+            nested.extend(scan_injection(segment.text, unicode_options))
+        nested.extend(scan_injection(decoded_unicode.canonical, unicode_options))
         if nested:
             findings.append(_make_finding(
                 "GP-ENC-NEST-001",
@@ -1159,7 +1168,7 @@ def _collect_encoded_layer(
             ))
             for nested_finding in nested[:6]:
                 findings.append(_clone_nested_finding(nested_finding, next_path, encoding_type))
-        _collect_encoded_layer(decoded, next_path, depth + 1, state, opts, findings, payloads)
+        _collect_encoded_layer(decoded_unicode.canonical, next_path, depth + 1, state, opts, findings, payloads)
 
     if len(text) >= 8 and any(ch.isalpha() and ord(ch) < 128 for ch in text):
         rotated = _rot13(text)
