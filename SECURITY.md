@@ -11,16 +11,11 @@ The latest public `main` branch and the latest published minor release are suppo
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately through GitHub Security Advisories for this repository when available. If private reporting is unavailable, open a minimal public issue that asks for a private contact path and does not include exploit details.
+Report suspected vulnerabilities privately through GitHub Security Advisories:
 
-Do not include:
+https://github.com/draarivpatel-ui/pypromptcage/security/advisories/new
 
-- real credentials, tokens, cookies, private keys, or session data
-- real personal data
-- exploit material against a third-party production system
-- large prompt-injection corpus files that contain private data
-
-Use synthetic examples only. Redact file paths, account names, hostnames, and exact secret values.
+Do not include real credentials, tokens, cookies, private keys, session data, real personal data, exploit material against a third-party production system, or large prompt-injection corpus files that contain private data. Use synthetic examples only. Redact file paths, account names, hostnames, and exact secret values.
 
 Please include:
 
@@ -29,6 +24,10 @@ Please include:
 - whether the issue is a detection bypass, resource-consumption problem, incorrect redaction, or incorrect package behavior
 - the expected security property and the observed result
 - any relevant rule IDs from the report
+
+## Disclosure timeline
+
+The maintainer will try to acknowledge a private report within 14 days, triage severity within 30 days, and coordinate a fix and disclosure date with the reporter. Critical fixes are prioritized over feature work. These are goals, not contractual commitments. After a fix is available, the reporter and maintainer should agree before public disclosure details are published.
 
 ## Scope
 
@@ -48,10 +47,6 @@ Out of scope:
 - model behavior after text leaves this library
 - missing detection for a paraphrase that has no stable syntactic signal
 - reports that require real vendor credentials or real personal data to reproduce
-
-## Response goals
-
-A maintainer will try to acknowledge reports within 14 days and triage severity within 30 days. These are goals, not contractual commitments. Critical fixes are prioritized over feature work.
 
 ## Design constraints for fixes
 

@@ -7,7 +7,7 @@ import json
 import sys
 from typing import Optional, Sequence
 
-from ._core import VERSION, inspect_output, inspect_prompt
+from ._core import DEFAULT_LIMITS, VERSION, inspect_output, inspect_prompt
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,6 +19,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+MAX_CLI_INPUT_BYTES = DEFAULT_LIMITS["max_input_length"] * 4 + 4
+
+
+def _read_text_bounded(stream, noun: str) -> str:
+    data = stream.read(MAX_CLI_INPUT_BYTES + 1)
+    if len(data) > MAX_CLI_INPUT_BYTES:
+        raise ValueError(noun + " exceeds the bounded CLI input byte limit")
+    return data.decode("utf-8")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -27,10 +37,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     try:
         if args.file:
-            with open(args.file, "r", encoding="utf-8") as handle:
-                text = handle.read()
+            with open(args.file, "rb") as handle:
+                text = _read_text_bounded(handle, "input file")
         else:
-            text = sys.stdin.read()
+            text = _read_text_bounded(sys.stdin.buffer, "standard input")
         report = inspect_output(text) if args.output else inspect_prompt(text)
     except Exception as error:  # bounded CLI error boundary
         sys.stderr.write(str(error) + "\n")

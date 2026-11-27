@@ -380,11 +380,11 @@ def _is_printable_tag_char(cp: int) -> bool:
 
 
 def _is_bidi_control(cp: int) -> bool:
-    return 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069
+    return cp == 0x061C or 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069
 
 
 def _is_zero_width(cp: int) -> bool:
-    return cp in {0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFEFF}
+    return cp in {0x00AD, 0x034F, 0x180E, 0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFEFF}
 
 
 def _is_variation_selector(cp: int) -> bool:
@@ -793,11 +793,11 @@ def _scan_windowed_instruction_patterns(lower: str, findings: List[Finding]) -> 
 
 _ROLE_LINE_RE = re.compile(r"^[\t ]{0,12}(system|assistant|user|developer|tool|human|ai)[\t ]*:[\t ]*\S", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^[\t ]{0,6}#{1,6}[\t ]+(system|instructions|system prompt|developer message)\b", re.IGNORECASE)
-_FENCE_RE = re.compile(r"```[\t ]*(system|instructions|prompt|json)\b", re.IGNORECASE)
-_DOUBLE_ROLE_RE = re.compile(r'"role"[\t ]*:[\t ]*"(system|assistant|user|tool)"', re.IGNORECASE)
-_SINGLE_ROLE_RE = re.compile(r"'role'[\t ]*:[\t ]*'(system|assistant|user|tool)'", re.IGNORECASE)
+_FENCE_RE = re.compile(r"(?:`{3,}|~{3,})[\t ]*(system|instructions|prompt|json)\b", re.IGNORECASE)
+_DOUBLE_ROLE_RE = re.compile(r'"role"[\t \r\n]*:[\t \r\n]*"(system|assistant|user|tool)"', re.IGNORECASE)
+_SINGLE_ROLE_RE = re.compile(r"'role'[\t \r\n]*:[\t \r\n]*'(system|assistant|user|tool)'", re.IGNORECASE)
 _INVOKE_RE = re.compile(r"<\/?(?:tool_call|function_call|tool_response|invoke|function_results?)\b[^>]{0,200}>", re.IGNORECASE)
-_JSON_TOOL_RE = re.compile(r'"(?:tool_calls|function_call)"[\t ]*:', re.IGNORECASE)
+_JSON_TOOL_RE = re.compile(r'"(?:tool_calls|function_call)"[\t \r\n]*:', re.IGNORECASE)
 
 
 def _scan_regex_findings(input_text: str, regex: re.Pattern[str], rule_id: str, description: str, findings: List[Finding]) -> None:
@@ -897,8 +897,9 @@ def _decode_base64_candidate(token: str, max_bytes: int) -> Optional[str]:
         return None
     if not decoded or len(decoded) > max_bytes:
         return None
-    canonical = base64.b64encode(decoded).decode("ascii").rstrip("=")
-    if canonical != token.rstrip("="):
+    canonical_padded = base64.b64encode(decoded).decode("ascii")
+    canonical_unpadded = canonical_padded.rstrip("=")
+    if token != canonical_padded and token != canonical_unpadded:
         return None
     text = _utf8_decode(decoded)
     if text is None or not _is_mostly_printable(text):
@@ -959,10 +960,6 @@ def _percent_decode_candidate(token: str, max_bytes: int) -> Optional[str]:
     return text
 
 
-def _is_token_delimiter(ch: Optional[str]) -> bool:
-    return ch is None or ch.isspace() or ch in {'"', "'", "`", "<", ">", "(", ")", "[", "]", "{", "}", ","}
-
-
 def _count_percent_hex_sequences(token: str) -> int:
     count = 0
     for index in range(0, max(0, len(token) - 2)):
@@ -973,6 +970,10 @@ def _count_percent_hex_sequences(token: str) -> int:
 
 def _encoded_value_character(ch: str) -> bool:
     return ch.isascii() and (ch.isalnum() or ch in {"+", "/", "%", "-", ".", "_", "~", "="})
+
+
+def _strict_encoded_core_character(ch: str) -> bool:
+    return ch.isascii() and (ch.isalnum() or ch in {"+", "/"})
 
 
 def _push_encoded_candidate(tokens: List[Dict[str, Any]], seen: set, candidate_type: str, token: str, start: int, end: int) -> None:
@@ -986,48 +987,61 @@ def _push_encoded_candidate(tokens: List[Dict[str, Any]], seen: set, candidate_t
         tokens.append({"type": candidate_type, "token": token, "start": start, "end": end})
 
 
-def _add_embedded_encoded_candidates(tokens: List[Dict[str, Any]], seen: set, outer_token: str, outer_start: int) -> None:
-    for index, ch in enumerate(outer_token):
-        if ch != "=":
-            continue
-        end = index + 1
-        while end < len(outer_token) and _encoded_value_character(outer_token[end]):
-            end += 1
-        value = outer_token[index + 1 : end]
-        if len(value) < 6:
-            continue
-        absolute_start = outer_start + index + 1
-        absolute_end = outer_start + end
-        if _count_percent_hex_sequences(value) >= 2:
-            _push_encoded_candidate(tokens, seen, "url", value, absolute_start, absolute_end)
+def _add_strict_encoded_runs(tokens: List[Dict[str, Any]], seen: set, text: str, run_start: int) -> None:
+    token_start = -1
+    padding_seen = False
+
+    def flush(end: int) -> None:
+        nonlocal token_start, padding_seen
+        if token_start != -1:
+            _push_encoded_candidate(tokens, seen, "auto", text[token_start:end], run_start + token_start, run_start + end)
+        token_start = -1
+        padding_seen = False
+
+    for index, ch in enumerate(text):
+        if _strict_encoded_core_character(ch):
+            if token_start == -1:
+                token_start = index
+            elif padding_seen:
+                flush(index)
+                token_start = index
+            padding_seen = False
+        elif ch == "=" and token_start != -1:
+            padding_seen = True
         else:
-            _push_encoded_candidate(tokens, seen, "auto", value, absolute_start, absolute_end)
+            flush(index)
+    flush(len(text))
+
+
+def _add_encoded_run(tokens: List[Dict[str, Any]], seen: set, text: str, start: int, end: int) -> None:
+    run = text[start:end]
+    if not run:
+        return
+    if _count_percent_hex_sequences(run) >= 2:
+        offset = 0
+        assignment = run.rfind("=")
+        if assignment >= 0 and _count_percent_hex_sequences(run[assignment + 1 :]) >= 2:
+            offset = assignment + 1
+        _push_encoded_candidate(tokens, seen, "url", run[offset:], start + offset, end)
+        return
+    _add_strict_encoded_runs(tokens, seen, run, start)
 
 
 def _extract_encoded_tokens(text: str) -> List[Dict[str, Any]]:
     tokens: List[Dict[str, Any]] = []
     seen = set()
     start = -1
-    token = ""
 
     def flush(end: int) -> None:
-        nonlocal start, token
-        if start != -1 and len(token) <= 2048:
-            if _count_percent_hex_sequences(token) >= 2:
-                _push_encoded_candidate(tokens, seen, "url", token, start, end)
-            else:
-                _push_encoded_candidate(tokens, seen, "auto", token, start, end)
-            _add_embedded_encoded_candidates(tokens, seen, token, start)
+        nonlocal start
+        if start != -1:
+            _add_encoded_run(tokens, seen, text, start, end)
         start = -1
-        token = ""
 
     for index, ch in enumerate(text):
-        if ord(ch) <= 127 and not _is_token_delimiter(ch) and ch != "=":
+        if ord(ch) <= 127 and _encoded_value_character(ch):
             if start == -1:
                 start = index
-            token += ch
-        elif ord(ch) <= 127 and ch == "=" and start != -1:
-            token += ch
         else:
             flush(index)
     flush(len(text))
@@ -1354,12 +1368,16 @@ def _suspicious_url_exfiltration(parsed: Any) -> Dict[str, bool]:
     return {"suspicious_key": suspicious_key, "long_value": long_value, "encoded_shape": encoded_shape, "exfiltrating": suspicious_key and (long_value or encoded_shape)}
 
 
-_MD_IMAGE_RE = re.compile(r"!\[[^\]\r\n]{0,200}\]\((https?://[^\s)]{1,1000})\)", re.IGNORECASE)
+_MD_IMAGE_RE = re.compile(r"!\[[^\]\r\n]{0,200}\]\([\t \r\n]{0,20}(?:<((?:https?:)?//[^\s<>]{1,1000})>|((?:https?:)?//[^\s)\"']{1,1000}))", re.IGNORECASE)
+_MD_IMAGE_REF_USE_RE = re.compile(r"!\[([^\]\r\n]{0,200})\][\t ]*\[([^\]\r\n]{0,120})\]", re.IGNORECASE)
+_MD_IMAGE_SHORTCUT_RE = re.compile(r"!\[([^\]\r\n]{1,120})\](?![\t ]*[\[(])", re.IGNORECASE)
+_MD_LINK_DEFINITION_RE = re.compile(r"^[\t ]{0,3}\[([^\]\r\n]{1,120})\]:[\t ]*(?:<((?:https?:)?//[^\s<>]{1,1000})>|((?:https?:)?//[^\s\"']{1,1000}))", re.IGNORECASE | re.MULTILINE)
 _DATA_URL_RE = re.compile(r"\bdata:([a-z0-9!#$&^_.+-]{1,80}/[a-z0-9!#$&^_.+-]{1,80})?(;base64)?,[^\s)\"'<>]{8,1000}", re.IGNORECASE)
 _PRIVATE_KEY_RE = re.compile(r"-----BEGIN(?: [A-Z0-9]{1,30})? PRIVATE KEY-----", re.IGNORECASE)
 _BEARER_RE = re.compile(r"\bauthorization[\t ]*:[\t ]*bearer[\t ]+([A-Za-z0-9._~+/=-]{8,256})", re.IGNORECASE)
-_SECRET_ASSIGNMENT_RE = re.compile(r"\b(api[_-]?key|token|access[_-]?token|auth[_-]?token|secret|password|client[_-]?secret|private[_-]?token)\b[\t ]*[:=][\t ]*[\"']?([^\"'\s,;]{8,256})", re.IGNORECASE)
-_JSON_SECRET_RE = re.compile(r"[\"'](api[_-]?key|token|access[_-]?token|auth[_-]?token|secret|password|client[_-]?secret|private[_-]?token)[\"'][\t ]*:[\t ]*[\"']([^\"']{8,256})[\"']", re.IGNORECASE)
+_SECRET_ASSIGNMENT_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_-]{0,80})[\t \r\n]*[:=][\t \r\n]*[\"']?([^\"'\s,;]{8,256})", re.IGNORECASE)
+_JSON_SECRET_RE = re.compile(r"[\"']([A-Za-z][A-Za-z0-9_-]{0,80})[\"'][\t \r\n]*:[\t \r\n]*[\"']([^\"']{8,256})[\"']", re.IGNORECASE)
+_VENDOR_SECRET_RE = re.compile(r"\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,240}|sk_(?:live|test)_[A-Za-z0-9]{16,240}|ghp_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255}|tskey-[A-Za-z0-9-]{16,240}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,255}|xox[baprs]-[A-Za-z0-9-]{10,255})\b")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,256}\.[A-Za-z0-9_-]{10,256}\.[A-Za-z0-9_-]{8,256}\b")
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,24}\b", re.IGNORECASE)
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
@@ -1413,6 +1431,59 @@ def _overlaps_existing(findings: Sequence[Finding], start: int, end: int, ids: s
     return False
 
 
+def _is_sensitive_key_name(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return "token" in normalized or "secret" in normalized or "password" in normalized or "api_key" in normalized or "apikey" in normalized
+
+
+def _markdown_image_finding(value: str, start: int, end: int, opts: PromptCageOptions) -> Optional[Finding]:
+    normalized_value = "https:" + value if value.startswith("//") else value
+    parsed = _parse_url_safely(normalized_value)
+    if parsed is None or not parsed.hostname or parsed.scheme not in {"http", "https"}:
+        return None
+    if _host_is_trusted(parsed.hostname, opts.trusted_image_hosts):
+        return None
+    severity = "high" if parsed.query else "medium"
+    return _make_finding("GP-EGR-MARKDOWN-IMG-001", "Markdown image URL can be used as a passive data-exfiltration channel", _summarize_url(parsed), start, end, severity=severity)
+
+
+def _normalize_markdown_label(value: str) -> str:
+    return re.sub(r"[\t \r\n]+", " ", value.strip()).lower()
+
+
+def _markdown_reference_labels(output_text: str) -> set:
+    labels = set()
+    for count, match in enumerate(_MD_IMAGE_REF_USE_RE.finditer(output_text)):
+        if count >= 32:
+            break
+        label = match.group(2) if match.group(2) else match.group(1)
+        normalized = _normalize_markdown_label(label)
+        if normalized:
+            labels.add(normalized)
+    for count, match in enumerate(_MD_IMAGE_SHORTCUT_RE.finditer(output_text)):
+        if count >= 32:
+            break
+        normalized = _normalize_markdown_label(match.group(1))
+        if normalized:
+            labels.add(normalized)
+    return labels
+
+
+def _scan_markdown_reference_images(output_text: str, opts: PromptCageOptions, findings: List[Finding]) -> None:
+    labels = _markdown_reference_labels(output_text)
+    if not labels:
+        return
+    for count, match in enumerate(_MD_LINK_DEFINITION_RE.finditer(output_text)):
+        if count >= 12:
+            break
+        label = _normalize_markdown_label(match.group(1))
+        if label not in labels:
+            continue
+        finding = _markdown_image_finding(match.group(2) or match.group(3), match.start(), match.end(), opts)
+        if finding is not None:
+            _push_capped(findings, finding)
+
+
 def scan_egress(output_text: str, options: Optional[Union[PromptCageOptions, Mapping[str, Any]]] = None) -> Tuple[Finding, ...]:
     opts = normalize_options(options)
     output_text = _assert_bounded_string(output_text, opts, "output")
@@ -1425,13 +1496,10 @@ def scan_egress(output_text: str, options: Optional[Union[PromptCageOptions, Map
     for count, match in enumerate(_MD_IMAGE_RE.finditer(output_text)):
         if count >= 12:
             break
-        parsed = _parse_url_safely(match.group(1))
-        if parsed is None or not parsed.hostname:
-            continue
-        if _host_is_trusted(parsed.hostname, opts.trusted_image_hosts):
-            continue
-        severity = "high" if parsed.query else "medium"
-        _push_capped(findings, _make_finding("GP-EGR-MARKDOWN-IMG-001", "Markdown image URL can be used as a passive data-exfiltration channel", _summarize_url(parsed), match.start(), match.end(), severity=severity))
+        finding = _markdown_image_finding(match.group(1) or match.group(2), match.start(), match.end(), opts)
+        if finding is not None:
+            _push_capped(findings, finding)
+    _scan_markdown_reference_images(output_text, opts, findings)
 
     for count, match in enumerate(_DATA_URL_RE.finditer(output_text)):
         if count >= 12:
@@ -1452,17 +1520,28 @@ def scan_egress(output_text: str, options: Optional[Union[PromptCageOptions, Map
     for count, match in enumerate(_SECRET_ASSIGNMENT_RE.finditer(output_text)):
         if count >= 12:
             break
+        if not _is_sensitive_key_name(match.group(1)):
+            continue
         _push_capped(findings, _make_finding("GP-EGR-CREDENTIAL-001", "Output contains a secret-like credential assignment", match.group(1) + " value length " + str(len(match.group(2))), match.start(), match.end()))
 
     for count, match in enumerate(_JSON_SECRET_RE.finditer(output_text)):
         if count >= 12:
             break
+        if not _is_sensitive_key_name(match.group(1)):
+            continue
         _push_capped(findings, _make_finding("GP-EGR-CREDENTIAL-001", "Output contains a serialized secret-like credential field", match.group(1) + " value length " + str(len(match.group(2))), match.start(), match.end()))
 
     for count, match in enumerate(_JWT_RE.finditer(output_text)):
         if count >= 12:
             break
         _push_capped(findings, _make_finding("GP-EGR-CREDENTIAL-001", "Output contains a three-part token shape", "token length " + str(len(match.group(0))), match.start(), match.end()))
+
+    for count, match in enumerate(_VENDOR_SECRET_RE.finditer(output_text)):
+        if count >= 12:
+            break
+        if _overlaps_existing(findings, match.start(), match.end(), {"GP-EGR-CREDENTIAL-001"}):
+            continue
+        _push_capped(findings, _make_finding("GP-EGR-CREDENTIAL-001", "Output contains a vendor-specific credential shape", "vendor credential length " + str(len(match.group(0))), match.start(), match.end()))
 
     for count, match in enumerate(_EMAIL_RE.finditer(output_text)):
         if count >= 12:
