@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile sources
+        run: python -m compileall -q src tests
+
+      - name: Run the test suite
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
+
+      - name: Check repository text policy
+        run: python scripts/check_repo.py
+
+      - name: CLI smoke check
+        env:
+          PYTHONPATH: src
+        run: python -m pypromptcage.cli --version
+
+  package:
+    name: build distributions
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Inspect distribution contents
+        run: |
+          python - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+          dist = Path('dist')
+          sdist = next(dist.glob('*.tar.gz'))
+          wheel = next(dist.glob('*.whl'))
+          with tarfile.open(sdist) as archive:
+              names = archive.getnames()
+          assert any(name.endswith('pypromptcage/_core.py') for name in names)
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          assert 'pypromptcage/py.typed' in names
+          assert 'pypromptcage/_core.py' in names
+          print('distribution contents verified')
+          PY

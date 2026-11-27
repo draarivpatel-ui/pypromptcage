@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pypromptcage"
+version = "1.0.0"
+description = "Zero-dependency Unicode, indirect prompt-injection, encoded-payload, and LLM output exfiltration firewall for Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "pypromptcage contributors" }]
+keywords = ["security", "llm-security", "prompt-injection", "unicode-security", "homoglyph", "ai-agent", "owasp-llm01", "cwe-1427"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Text Processing :: Filters",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/draarivpatel-ui/pypromptcage"
+Repository = "https://github.com/draarivpatel-ui/pypromptcage"
+Issues = "https://github.com/draarivpatel-ui/pypromptcage/issues"
+
+[project.scripts]
+pypromptcage = "pypromptcage.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pypromptcage = ["py.typed"]
