@@ -5,24 +5,27 @@ from __future__ import annotations
 import sys
 import unittest
 
+from contextlib import nullcontext
+
 try:
     import atheris
 except ImportError:
     atheris = None
 
-from pypromptcage import (
-    PromptCageError,
-    assert_safe_output,
-    assert_safe_prompt,
-    inspect_output,
-    inspect_prompt,
-    sanitize_output,
-    sanitize_prompt,
-    scan_encoded,
-    scan_egress,
-    scan_injection,
-    scan_unicode,
-)
+with (atheris.instrument_imports(include=["pypromptcage"]) if atheris is not None else nullcontext()):
+    from pypromptcage import (
+        PromptCageError,
+        assert_safe_output,
+        assert_safe_prompt,
+        inspect_output,
+        inspect_prompt,
+        sanitize_output,
+        sanitize_prompt,
+        scan_encoded,
+        scan_egress,
+        scan_injection,
+        scan_unicode,
+    )
 
 _TOKEN_STRINGS = (
     "",
@@ -126,6 +129,9 @@ def exercise(data: bytes) -> None:
             pass
         else:
             raise AssertionError("blocked output passed assert_safe_output")
+
+
+exercise = atheris.instrument_func(exercise) if atheris is not None else exercise
 
 
 def _seed_bytes(seed: int, length: int = 80) -> bytes:
